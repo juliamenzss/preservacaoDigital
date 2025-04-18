@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "./node_modules/.prisma/client"
 }
 datasource db {
   provider = "postgresql"
@@ -14,6 +15,35 @@ model User {
   role      Int      @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-
+  documents Document[] 
   @@map("users")
+}
+
+model Document {
+  id              String   @id @default(uuid())
+  name            String
+  uploadDate      DateTime @default(now())
+  preservationDate DateTime?
+  status          PreservationStatus @default(INICIADA)
+
+  archivematicaId String
+  sipId           String?
+  aipId           String?
+  dipId           String?
+  filePath        String
+  metadados       Json
+  author          String?
+  description     String?
+  keywords        String?
+  category        String?
+
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  @@map("documents")
+}
+
+enum PreservationStatus {
+  INICIADA
+  PRESERVADO
+  FALHA
 }
