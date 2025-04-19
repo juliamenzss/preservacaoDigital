@@ -7,8 +7,8 @@ export class ArchivematicaController {
   constructor(private readonly archivematicaService: ArchivematicaService) {}
 
   @Post('upload')
-  upload(@Body() dto: CreateDocumentDto) {
-    return this.archivematicaService.upload(dto);
+  startTransfer(@Body() dto: CreateDocumentDto) {
+    return this.archivematicaService.startTransfer(dto);
   }
 
   @Post('approve/:directory')
@@ -23,7 +23,7 @@ export class ArchivematicaController {
 
   @Post('process/:id')
   async process(@Param('id') id: string) {
-    return this.archivematicaService.processAIP(id);
+    return this.archivematicaService.processSIP(id);
   }
 
   @Get('download/:id')

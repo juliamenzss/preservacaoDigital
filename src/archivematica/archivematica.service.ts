@@ -19,7 +19,8 @@ export interface TransferStatus {
 
 @Injectable()
 export class ArchivematicaService {
-  private readonly apiUrl?: string;
+  private readonly apiDashboard?: string;
+  private readonly apiStorage?: string;
   private readonly username?: string;
   private readonly apiKey?: string;
 
@@ -28,18 +29,23 @@ export class ArchivematicaService {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.apiUrl = this.configService.get<string>('ARCHIVEMATICA_API_URL');
+    this.apiDashboard = this.configService.get<string>('ARCHIVEMATICA_DASHBOARD_URL');
+    this.apiStorage = this.configService.get<string>('ARCHIVEMATICA_STORAGE_URL');
     this.username = this.configService.get<string>('ARCHIVEMATICA_USERNAME');
     this.apiKey = this.configService.get<string>('ARCHIVEMATICA_API_KEY');
   }
 
-  private baseUrl(endpoint: string): string {
-    return `${this.apiUrl}${endpoint}?username=${this.username}&api_key=${this.apiKey}`;
+  private dashboardUrl(endpoint: string): string {
+    return `${this.apiDashboard}${endpoint}?username=${this.username}&api_key=${this.apiKey}`;
   }
-
-  async upload(dto: CreateDocumentDto): Promise<{ transferId: string }> {
-    const url = this.baseUrl('/api/transfer/start_tranfer/');
-    const tranferData = {
+  
+  private storageUrl(endpoint: string): string {
+    return `${this.apiStorage}${endpoint}?username=${this.username}&api_key=${this.apiKey}`;
+  }
+  
+  async startTransfer(dto: CreateDocumentDto): Promise<{ transferId: string }> {
+    const url = this.dashboardUrl('/api/transfer/start_transfer/');
+    const transferData = {
       name: dto.name,
       type: 'standard',
       accession: dto.documentId || Date.now().toString(),
@@ -47,7 +53,7 @@ export class ArchivematicaService {
     };
     try {
       const { data } = await firstValueFrom(
-        this.httpService.post(url, tranferData).pipe(
+        this.httpService.post(url, transferData).pipe(
           take(1),
           catchError((error: AxiosError) => {
             this.logger.error(error.response?.data || error.message);
@@ -63,7 +69,7 @@ export class ArchivematicaService {
   }
 
   async approveTransfer(directory: string, type = 'standard'): Promise<any> {
-    const url = this.baseUrl('/api/transfer/approve/');
+    const url = this.dashboardUrl('/api/transfer/approve/');
 
     const approvalData = {
       type,
@@ -87,7 +93,7 @@ export class ArchivematicaService {
   }
 
   async getTransferStatus(id: string): Promise<TransferStatus> {
-    const url = this.baseUrl(`/api/transfer/status/${id}/`);
+    const url = this.dashboardUrl(`/api/transfer/status/${id}/`);
 
     try {
       const { data } = await firstValueFrom(
@@ -106,7 +112,7 @@ export class ArchivematicaService {
   }
 
   async dowloadAIP(id: string): Promise<any> {
-    const url = this.baseUrl(`/api/v2beta/file/${id}/download/`);
+    const url = this.storageUrl(`/api/v2beta/file/${id}/download/`);
 
     try {
       const { data } = await firstValueFrom(
@@ -125,11 +131,11 @@ export class ArchivematicaService {
     }
   }
 
-  async processAIP(
+  async processSIP(
     id: string,
     processingConfig: string = 'default',
   ): Promise<any> {
-    const url = this.baseUrl(`/api/ingest/process/${id}/`);
+    const url = this.dashboardUrl(`/api/ingest/process/${id}/`);
 
     const processingData = {
       processing_config: processingConfig,
@@ -152,7 +158,7 @@ export class ArchivematicaService {
   }
 
   async getUnapproved(): Promise<any> {
-    const url = this.baseUrl('/api/tranfer/unapproved/');
+    const url = this.dashboardUrl('/api/transfer/unapproved/');
 
     const response = await firstValueFrom(
       this.httpService.get(url).pipe(
@@ -171,7 +177,7 @@ export class ArchivematicaService {
   }
 
   async getCompleted(): Promise<any> {
-    const url = this.baseUrl('/api/transfer/completed/');
+    const url = this.dashboardUrl('/api/transfer/completed/');
 
     const response = await firstValueFrom(
       this.httpService.get(url).pipe(
@@ -198,7 +204,7 @@ export class ArchivematicaService {
     if (!foundTransfer) {
       throw new Error('Transferência não encontrada');
     }
-    const url = this.baseUrl(`/api/transfer/${id}/delete/`);
+    const url = this.dashboardUrl(`/api/transfer/${id}/delete/`);
 
     await firstValueFrom(
       this.httpService.delete(url).pipe(
