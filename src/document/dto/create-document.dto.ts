@@ -15,40 +15,20 @@ export class CreateDocumentDto {
   @Length(3, 45, { message: 'Nome deve ter entre 3 e 45 caracteres.' })
   name: string;
 
+  @IsOptional()
   @IsString()
-  filePath: string;
-
-  @IsJSON()
-  metadados: {
-    keyword: string;
-    category: string;
-    description: string;
-    author: string;
-  };
-
-  @IsOptional()
-  @IsDateString()
-  preservationDate?: string;
-
-  @IsOptional()
-  @IsDateString()
-  uploadDate?: string;
+  keyword: string;
 
   @IsOptional()
   @IsString()
-  description?: string;
+  category: string;
 
   @IsOptional()
   @IsString()
-  status?: 'INICIADA' | 'PRESERVADO' | 'FALHA';
+  description: string;
 
   @IsOptional()
   @IsString()
-  archivematicaId?: string;
+  author: string;
 
-  @IsUUID()
-  userId: string;
-
-  @IsUUID()
-  documentId: string;
 }

@@ -1,13 +1,14 @@
 import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { ArchivematicaService } from './archivematica.service';
 import { CreateDocumentDto } from 'src/document/dto/create-document.dto';
+import { TransferData } from 'src/document/dto/transfer-data.dto';
 
 @Controller('archivematica')
 export class ArchivematicaController {
   constructor(private readonly archivematicaService: ArchivematicaService) {}
 
   @Post('upload')
-  startTransfer(@Body() dto: CreateDocumentDto) {
+  startTransfer(@Body() dto: TransferData) {
     return this.archivematicaService.startTransfer(dto);
   }
 

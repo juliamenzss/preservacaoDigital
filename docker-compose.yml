@@ -1,4 +1,4 @@
-version: '3.9'
+version: '3.8'
 
 services:
   backend:
@@ -6,28 +6,40 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
     depends_on:
       - db
-    volumes:
-      - .:/usr/src/app
+    environment:
+      - UID=${UID}
+      - GID=${GID}
+    user: "${UID}:${GID}"
     networks:
-      - archivematica_net
+      - preservacao-network
+    volumes:
+      - ./src:/usr/src/app/src
+      - ./prisma:/usr/src/app/prisma
+      - ./uploads:/home/uploads
 
   db:
     image: postgres:14
-    restart: always
+    container_name: preservacao-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: preservacaoDigital
     volumes:
       - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
-      - archivematica_net
+      - preservacao-network
 
 volumes:
   db_data:
+  archivematica_pipeline_data:
+  
 
 networks:
-  archivematica_net:
-    external: true
+  preservacao-network:
+    driver: bridge

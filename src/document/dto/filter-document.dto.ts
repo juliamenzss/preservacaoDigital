@@ -4,7 +4,7 @@ export class FilterDocumentDto {
   category?: string;
   keywords?: string;
   description?: string;
-  startDate?: string;
-  endDate?: string;
+  startDate?: Date | string;
+  endDate?: Date | string;
   status?: 'INICIADA' | 'PRESERVADO' | 'FALHA';
 }

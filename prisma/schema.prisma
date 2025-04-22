@@ -1,6 +1,5 @@
 generator client {
   provider = "prisma-client-js"
-  output   = "./node_modules/.prisma/client"
 }
 datasource db {
   provider = "postgresql"
@@ -31,7 +30,6 @@ model Document {
   aipId           String?
   dipId           String?
   filePath        String
-  metadados       Json
   author          String?
   description     String?
   keywords        String?

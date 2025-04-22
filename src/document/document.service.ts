@@ -1,22 +1,54 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { CreateDocumentDto } from './dto/create-document.dto';
 import { UpdateDocumentDto } from './dto/update-document.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { ArchivematicaService } from 'src/archivematica/archivematica.service';
 import { FilterDocumentDto } from './dto/filter-document.dto';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { TransferData } from './dto/transfer-data.dto';
+import * as xml2js from 'xml2js';
+import { MetadataDto } from './dto/metadata.dto';
+
 
 @Injectable()
 export class DocumentService {
   private readonly logger = new Logger(DocumentService.name);
+  private readonly transferSourceDir = '/var/archivematica/sharedDirectory/watchedDirectories/standard';
+  private readonly baseArchivematicaDir = '/var/archivematica/sharedDirectory';
   constructor(
     private readonly prisma: PrismaService,
     private readonly archivematicaService: ArchivematicaService,
-  ) {}
+  ) { }
 
-  async createNewDocument(dto: CreateDocumentDto, userId: string) {
-    try{
-      const { transferId  } = await this.archivematicaService.upload(dto);
-      await this.archivematicaService.approveTransfer(transferId);
+  async createNewDocument(file: Express.Multer.File, dto: CreateDocumentDto, userId: string) {
+    try {
+      if (!fs.existsSync(this.transferSourceDir)) {
+        fs.mkdirSync(this.transferSourceDir, { recursive: true });
+        fs.chmodSync(this.transferSourceDir, 0o777);
+      }
+
+      const transferName = `transfer-${dto.name}-${Date.now()}`.replace(/[^\w-]/g, '_');
+      const filename = file.originalname.replace(/[^\w.-]/g, '_');
+      const transferDir = path.join(this.transferSourceDir, transferName);
+
+      fs.mkdirSync(transferDir, { recursive: true });
+
+      const filePath = path.join(transferDir, filename);
+      fs.writeFileSync(filePath, file.buffer);
+
+      fs.chmodSync(transferDir, 0o777);
+      fs.chmodSync(filePath, 0o666);
+
+      const transferData: TransferData = {
+        name: transferName,
+        type: 'standard',
+        accession: Date.now().toString(),
+        paths: [filePath],
+        row_ids: [''],
+      };
+      const { transferId } = await this.archivematicaService.startTransfer(transferData);
+      const sipUuid = await this.archivematicaService.waitForSipFromTransfer(transferId);
 
       const document = await this.prisma.document.create({
         data: {
@@ -24,22 +56,61 @@ export class DocumentService {
           userId,
           archivematicaId: transferId,
           status: 'INICIADA',
-        }
+          filePath: path.relative(this.baseArchivematicaDir, filePath),
+        },
       });
-      this.monitoringDocumentStatus(transferId, document.id);
+
       return document;
 
-    }catch(error){
-      this.logger.error(`Error creating document: ${error.message}`);
-      throw new BadRequestException('Failed to create document');
+    } catch (error) {
+      this.logger.error(`Erro detalhado: ${error.stack}`);
+      throw new BadRequestException(`Falha ao criar documento: ${error.message}`);
     }
-  };
+  }
+
+  async handleMetadata(documentId: string, metadataDto: MetadataDto) {
+    const document = await this.prisma.document.findUnique({
+      where: { id: documentId },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Documento não encontrado');
+    }
+    const metadataXml = this.generateMetadataXml(metadataDto);
+
+    const sourceLocationUuid = process.env.SOURCE_LOCATION_UUID;
+    if (!sourceLocationUuid) {
+      throw new Error();
+    }
+    const sipUuid = document.archivematicaId;
+    await this.archivematicaService.addMetadataFile(
+      sipUuid,
+      sourceLocationUuid,
+      metadataXml,
+    );
+    return { success: true };
+  }
+
+  private generateMetadataXml(metadataDto: MetadataDto): string {
+    const builder = new xml2js.Builder();
+    const metadata = {
+      metadata: {
+        author: metadataDto.author,
+        description: metadataDto.description,
+        keyword: metadataDto.keywords,
+        category: metadataDto.category,
+      },
+    };
+
+    return builder.buildObject(metadata);
+  }
+
 
   private async monitoringDocumentStatus(transferId: string, documentId: string) {
     this.archivematicaService.monitoringStatus(transferId, async (res) => {
       try {
         let currentStatus: 'PRESERVADO' | 'FALHA' | 'INICIADA';
-  
+
         if (res.success) {
           currentStatus = 'PRESERVADO';
         } else if (res.error) {
@@ -47,12 +118,12 @@ export class DocumentService {
         } else {
           currentStatus = 'INICIADA';
         }
-  
+
         await this.prisma.document.update({
           where: { id: documentId },
           data: { status: currentStatus }
         });
-      } catch(error) {
+      } catch (error) {
         throw new BadRequestException(error)
       }
     });
@@ -66,10 +137,10 @@ export class DocumentService {
         category: filters.category ? { equals: filters.category } : undefined,
         keywords: filters.keywords ? { contains: filters.keywords, mode: 'insensitive' } : undefined,
         description: filters.description ? { contains: filters.description, mode: 'insensitive' } : undefined,
-        uploadDate: filters.startDate && filters.endDate ?{ gte: new Date(filters.startDate), lte: new Date(filters.endDate) } : undefined,
+        uploadDate: filters.startDate && filters.endDate ? { gte: new Date(filters.startDate), lte: new Date(filters.endDate) } : undefined,
         status: filters.status ? { equals: filters.status } : undefined,
-        },
-      orderBy: {uploadDate: 'desc'}
+      },
+      orderBy: { uploadDate: 'desc' }
     });
     return documents;
   }
@@ -86,7 +157,7 @@ export class DocumentService {
     const document = await this.prisma.document.findUnique({
       where: { id, userId }
     });
-    if(!document){
+    if (!document) {
       throw new NotFoundException('Document not found');
     }
 
@@ -97,7 +168,7 @@ export class DocumentService {
         infoDocument
       };
     }
-    
+
     return document;
   }
 
@@ -125,26 +196,26 @@ export class DocumentService {
     });
   }
 
-  async dowloadDocument(id: string, userId: string){
+  async dowloadDocument(id: string, userId: string) {
     const document = await this.prisma.document.findUnique({
       where: { id, userId }
     });
 
-    if(!document){
+    if (!document) {
       throw new NotFoundException('Documento não encontrado');
     }
-    if(document.status !== 'PRESERVADO' || !document.archivematicaId){
+    if (document.status !== 'PRESERVADO' || !document.archivematicaId) {
       throw new BadRequestException('Documento não preservado ainda, por favor, tente mais tarde.');
     }
 
     return this.archivematicaService.dowloadAIP(document.archivematicaId);
   }
 
-  async getDocumentStatus(id: string, userId: string){
+  async getDocumentStatus(id: string, userId: string) {
     const document = await this.prisma.document.findUnique({
       where: { id, userId }
     });
-    if(!document){
+    if (!document) {
       throw new NotFoundException('Documento não encontrado')
     }
     return {

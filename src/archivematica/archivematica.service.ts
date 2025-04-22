@@ -2,8 +2,9 @@ import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AxiosError } from 'axios';
+import * as qs from 'qs';
 import { catchError, firstValueFrom, take } from 'rxjs';
-import { CreateDocumentDto } from 'src/document/dto/create-document.dto';
+import { TransferData } from 'src/document/dto/transfer-data.dto';
 
 export interface TransferStatus {
   status: 'INICIADA' | 'PRESERVADO' | 'FALHA';
@@ -38,46 +39,85 @@ export class ArchivematicaService {
   private dashboardUrl(endpoint: string): string {
     return `${this.apiDashboard}${endpoint}?username=${this.username}&api_key=${this.apiKey}`;
   }
-  
+
   private storageUrl(endpoint: string): string {
     return `${this.apiStorage}${endpoint}?username=${this.username}&api_key=${this.apiKey}`;
   }
-  
-  async startTransfer(dto: CreateDocumentDto): Promise<{ transferId: string }> {
-    const url = this.dashboardUrl('/api/transfer/start_transfer/');
-    const transferData = {
-      name: dto.name,
-      type: 'standard',
-      accession: dto.documentId || Date.now().toString(),
-      paths: [dto.filePath],
-    };
+
+  async startTransfer(transferData: TransferData): Promise<{ transferId: string }> {
+    const url = `${this.apiDashboard}/api/transfer/start_transfer/`;
+
+    if (!transferData.name || !transferData.paths || transferData.paths.length === 0) {
+      throw new Error('Parâmetros obrigatórios faltando: name ou paths');
+    }
+
+    const params = new URLSearchParams();
+    params.append('username', 'test');
+    params.append('api_key', 'test');
+    params.append('name', transferData.name);
+    params.append('type', transferData.type || 'standard');
+    params.append('accession', transferData.accession || '');
+
+    transferData.paths.forEach((path, index) => {
+      params.append(`paths[${index}]`, path);
+    });
+
+    (transferData.row_ids || ['']).forEach((rowId, index) => {
+      params.append(`row_ids[${index}]`, rowId);
+    });
+
+    this.logger.debug(`Enviando para Archivematica: ${url}`);
+    this.logger.debug(`Dados da requisição: ${params.toString()}`);
+
     try {
-      const { data } = await firstValueFrom(
-        this.httpService.post(url, transferData).pipe(
-          take(1),
-          catchError((error: AxiosError) => {
-            this.logger.error(error.response?.data || error.message);
-            throw new Error('Erro ao iniciar transferência');
-          }),
-        ),
+      const response = await firstValueFrom(
+        this.httpService.post(url, params.toString(), {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          maxRedirects: 0
+        })
       );
-      return { transferId: data.uuid };
+
+      if (response.data.error) {
+        throw new Error(response.data.message || 'Erro desconhecido no Archivematica');
+      }
+
+      if (!response.data.uuid) {
+        throw new Error('Resposta inválida do Archivematica - UUID ausente');
+      }
+
+      return { transferId: response.data.uuid };
     } catch (error) {
-      this.logger.error(error.message);
-      throw new Error('Erro ao iniciar o upload');
+      const axiosError = error as AxiosError;
+      this.logger.error(`Erro completo: ${JSON.stringify({
+        status: axiosError.response?.status,
+        data: axiosError.response?.data,
+        message: axiosError.message,
+        config: {
+          url: axiosError.config?.url,
+          data: axiosError.config?.data
+        }
+      }, null, 2)}`);
+      throw new Error('Falha ao iniciar transferência');
     }
   }
 
-  async approveTransfer(directory: string, type = 'standard'): Promise<any> {
+  async approveTransfer(transferId: string, type = 'standard'): Promise<any> {
     const url = this.dashboardUrl('/api/transfer/approve/');
 
-    const approvalData = {
+    const approvalData = qs.stringify({
       type,
-      directory,
-    };
+      directory: transferId,
+    });
+
     try {
       const { data } = await firstValueFrom(
-        this.httpService.post(url, approvalData).pipe(
+        this.httpService.post(url, approvalData, {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+        }).pipe(
           take(1),
           catchError((error: AxiosError) => {
             this.logger.error(error.response?.data || error.message);
@@ -91,6 +131,32 @@ export class ArchivematicaService {
       throw new Error('Erro ao aprovar a transferência');
     }
   }
+
+  async addMetadataFile(sipUuid: string, sourceLocationUuid: string, filePath: string) {
+    const url = `${this.dashboardUrl}/api/ingest/copy_metadata_files/`;
+
+    const sourcePath = `${sourceLocationUuid}:${filePath}`;
+    const sourcePathBase64 = Buffer.from(sourcePath).toString('base64');
+
+    const payload = {
+      sip_uuid: sipUuid,
+      source_paths: [sourcePathBase64],
+    };
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+
+    try {
+      const { data } = await firstValueFrom(
+        this.httpService.post(url + `?username=${this.username}&api_key=${this.apiKey}`, payload, { headers }),
+      );
+      return data;
+    } catch (error) {
+      this.logger.error('Erro ao adicionar metadados:', error.response?.data || error.message);
+      throw new Error('Erro ao adicionar metadados');
+    }
+  }
+
 
   async getTransferStatus(id: string): Promise<TransferStatus> {
     const url = this.dashboardUrl(`/api/transfer/status/${id}/`);
@@ -218,7 +284,7 @@ export class ArchivematicaService {
     return { message: 'Transferência removida com sucesso' };
   }
 
-  async monitoringStatus( id: string, callback: (status: any) => void): Promise<void> {//analisar se status de iniciado cai aqui
+  async monitoringStatus(id: string, callback: (status: any) => void): Promise<void> {
     const checkStatus = async () => {
       try {
         const statusData = await this.getTransferStatus(id);
@@ -237,4 +303,30 @@ export class ArchivematicaService {
     };
     checkStatus();
   }
+
+  async waitForSipFromTransfer(transferId: string): Promise<string> {
+    const statusUrl = `${this.dashboardUrl}/ingest/status/${transferId}/?username=${this.username}&api_key=${this.apiKey}`;
+
+    let attempts = 0;
+    const maxAttempts = 20;
+    const delay = 5000;
+
+    while (attempts < maxAttempts) {
+      try {
+        const { data } = await firstValueFrom(this.httpService.get(statusUrl));
+        if (data && data.uuid && data.status !== 'PROCESSING') {
+          this.logger.log(`SIP encontrado: ${data.uuid}`);
+          return data.uuid;
+        }
+      } catch (err) {
+        this.logger.warn(`Tentativa ${attempts + 1}: SIP ainda não disponível.`);
+      }
+
+      attempts++;
+      await new Promise((res) => setTimeout(res, delay));
+    }
+
+    throw new Error('Tempo limite excedido aguardando criação do SIP');
+  }
+
 }
